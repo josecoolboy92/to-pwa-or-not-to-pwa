@@ -1,0 +1,1427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>My To-Do List</title>
+  <meta name="description" content="A to-do list with time limits, snoozes and achievements.">
+
+  <!-- ---------- Installable app (PWA) settings ----------
+       The manifest tells the phone or computer the app's name, icons and colors. -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#e6edf1" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#11191e" media="(prefers-color-scheme: dark)">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+
+  <!-- iPhone and iPad use these instead of the manifest for the home screen icon and name -->
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="To-Do">
+
+  <!-- ============================================================
+       STYLES (CSS): how the page looks
+       ============================================================ -->
+  <style>
+    /* Colors live in one place. Change a value here and it changes everywhere. */
+    :root {
+      color-scheme: light dark;
+      --bg: #e6edf1;
+      --card: #ffffff;
+      --ink: #1a2b34;
+      --muted: #5b6b75;
+      --line: #d5dee4;
+      --accent: #0e6b73;
+      --accent-ink: #ffffff;
+      --done: #8a98a1;
+      --danger: #b3261e;
+
+      /* New: colors for winning, running low on time, and failing */
+      --good: #1f7a3d;
+      --good-tint: rgba(31, 122, 61, 0.16);
+      --warn: #94590a;
+      --alert: #b3261e;
+      --alert-tint: rgba(179, 38, 30, 0.08);
+      --alert-tint-strong: rgba(179, 38, 30, 0.22);
+    }
+
+    /* Automatically switch to dark colors if the phone or computer is in dark mode */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #11191e;
+        --card: #1a252c;
+        --ink: #e6eef2;
+        --muted: #9baab4;
+        --line: #2b3a43;
+        --accent: #4fb8c0;
+        --accent-ink: #0b1a1d;
+        --done: #6f7f89;
+        --danger: #f2b8b5;
+
+        --good: #6fd39a;
+        --good-tint: rgba(111, 211, 154, 0.18);
+        --warn: #f0b45a;
+        --alert: #ff8a80;
+        --alert-tint: rgba(255, 138, 128, 0.10);
+        --alert-tint-strong: rgba(255, 138, 128, 0.26);
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      /* The max() keeps the usual spacing, but adds room for phone notches and the home bar */
+      padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+               max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Avenir Next", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+      font-size: 17px;
+      line-height: 1.45;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 520px;
+      margin-top: 4vh;
+      padding: 28px 24px 20px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 8px 30px rgba(20, 40, 50, 0.08);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.15;
+      letter-spacing: -0.01em;
+    }
+
+    #count {
+      margin: 4px 0 20px;
+      color: var(--muted);
+      font-size: 15px;
+      transform-origin: left center;
+    }
+
+    /* The "add a task" row */
+    .add-row { display: flex; gap: 8px; }
+
+    .add-row input {
+      flex: 1;
+      min-width: 0;
+      padding: 12px 14px;
+      font: inherit;
+      color: var(--ink);
+      background: transparent;
+      border: 1.5px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .add-row input::placeholder { color: var(--muted); }
+
+    button {
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .add-row button {
+      padding: 12px 18px;
+      font-weight: 600;
+      color: var(--accent-ink);
+      background: var(--accent);
+      border: none;
+      border-radius: 10px;
+    }
+
+    /* New: the "time limit" picker under the add row */
+    .limit-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .limit-row select {
+      flex: 1;
+      min-width: 0;
+      max-width: 260px;
+      padding: 8px 10px;
+      font: inherit;
+      font-size: 15px;
+      color: var(--ink);
+      background: var(--card);
+      border: 1.5px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .hint {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .hint:empty { display: none; }
+
+    /* Keyboard users can always see where they are */
+    input:focus-visible,
+    select:focus-visible,
+    button:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* The All / To do / Done buttons */
+    .filters {
+      display: flex;
+      gap: 6px;
+      margin: 20px 0 8px;
+    }
+
+    .filters button {
+      padding: 6px 14px;
+      font-size: 15px;
+      color: var(--muted);
+      background: transparent;
+      border: 1.5px solid var(--line);
+      border-radius: 999px;
+    }
+
+    .filters button[aria-pressed="true"] {
+      color: var(--accent-ink);
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* The list itself */
+    ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    li {
+      position: relative;
+      isolation: isolate; /* keeps the colored glow (li::before) behind the text */
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    li:last-child { border-bottom: none; }
+
+    /* An invisible colored layer behind each task.
+       We fade it in for wins, warnings and failures. */
+    li::before {
+      content: "";
+      position: absolute;
+      inset: 0 -10px;
+      z-index: -1;
+      border-radius: 10px;
+      pointer-events: none;
+      opacity: 0;
+    }
+
+    /* A custom round checkbox. It is still a real checkbox underneath. */
+    li input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      flex: none;
+      width: 26px;
+      height: 26px;
+      margin: 0;
+      border: 2px solid var(--muted);
+      border-radius: 50%;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    li input[type="checkbox"]::after {
+      content: "";
+      width: 6px;
+      height: 12px;
+      margin-top: -2px;
+      border: solid var(--accent-ink);
+      border-width: 0 2.5px 2.5px 0;
+      transform: rotate(45deg) scale(0);
+      transition: transform 0.15s;
+    }
+
+    li input[type="checkbox"]:checked {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    li input[type="checkbox"]:checked::after {
+      transform: rotate(45deg) scale(1);
+    }
+
+    /* The task text and the timer info sit together in one column */
+    .task-body {
+      flex: 1;
+      min-width: 0;
+    }
+
+    li label {
+      display: block;
+      padding-top: 1px;
+      cursor: pointer;
+      overflow-wrap: anywhere;
+      text-decoration: line-through;
+      text-decoration-color: transparent;
+      transition: color 0.2s, text-decoration-color 0.2s;
+    }
+
+    /* A finished task: grey text with a line through it */
+    li.done label {
+      color: var(--done);
+      text-decoration-color: currentColor;
+    }
+
+    .delete {
+      flex: none;
+      width: 32px;
+      height: 32px;
+      font-size: 22px;
+      line-height: 1;
+      color: var(--muted);
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+    }
+
+    .delete:hover { color: var(--danger); }
+
+    /* ---------- New: timer info under each task ---------- */
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 10px;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .timer { font-variant-numeric: tabular-nums; }
+
+    /* The three dots show how many snoozes are left */
+    .dots {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: auto;
+    }
+
+    .dots i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .dots i.used {
+      background: transparent;
+      box-shadow: inset 0 0 0 1.5px var(--muted);
+    }
+
+    .dots span { margin-right: 2px; }
+
+    /* The shrinking bar */
+    .bar {
+      height: 6px;
+      margin-top: 8px;
+      overflow: hidden;
+      background: var(--line);
+      border-radius: 999px;
+    }
+
+    .bar-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 999px;
+      transform-origin: left center;
+      transform: scaleX(var(--p, 1));
+      transition: transform 1s linear, background 0.3s;
+    }
+
+    .badge {
+      padding: 1px 8px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--card);
+      background: var(--alert);
+      border-radius: 6px;
+    }
+
+    /* The three snooze choices (half, full, one third) shown when time is up */
+    .snooze-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .snooze {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+      padding: 8px 6px;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.2;
+      color: var(--accent);
+      background: transparent;
+      border: 1.5px solid var(--accent);
+      border-radius: 12px;
+    }
+
+    /* The one that starts by itself if you do nothing */
+    .snooze.default {
+      color: var(--accent-ink);
+      background: var(--accent);
+    }
+
+    .snooze-time {
+      font-size: 13px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ---------- New: how each state looks ---------- */
+
+    /* Running low on time (the last quarter) */
+    li.warning .timer { color: var(--warn); font-weight: 600; }
+    li.warning .bar-fill { background: var(--warn); }
+
+    /* Time is up but snoozes are left: the row glows red and breathes */
+    li.overdue input[type="checkbox"],
+    li.failed input[type="checkbox"] { border-color: var(--alert); }
+
+    li.overdue .timer,
+    li.failed .timer { color: var(--alert); font-weight: 600; }
+
+    li.overdue .bar,
+    li.failed .bar { background: var(--alert-tint-strong); }
+
+    li.overdue::before {
+      opacity: 1;
+      background: var(--alert-tint);
+      box-shadow: inset 0 0 0 1.5px var(--alert);
+      animation: breathe 1.6s ease-in-out infinite;
+    }
+
+    /* While overdue, the bar drains over the 10 seconds you have to pick a snooze */
+    li.overdue .bar-fill { background: var(--alert); }
+
+    /* Out of time AND out of snoozes: the task is missed */
+    li.failed::before {
+      opacity: 1;
+      background: var(--alert-tint);
+    }
+
+    /* Finished */
+    li.done .timer { color: var(--good); }
+    li.late .timer { color: var(--warn); }
+
+    /* ---------- New: one-time animations ----------
+       The JavaScript adds these classes for a moment, then removes them. */
+
+    /* A win: the checkbox pops and the row flashes green */
+    li.anim-win::before {
+      background: var(--good-tint);
+      animation: flash-fade 1.1s ease-out;
+    }
+
+    li.anim-win input[type="checkbox"] {
+      animation: pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1);
+    }
+
+    /* Time just ran out: a quick jolt */
+    li.anim-overdue { animation: jolt 0.5s ease-out; }
+
+    /* Failure: the whole row shakes, flashes red, and "Missed" is stamped on */
+    li.anim-fail { animation: shake 0.6s ease-out; }
+    li.anim-fail::before { animation: flash-bad 1.4s ease-out; }
+    li.anim-fail .badge { animation: stamp 0.5s cubic-bezier(0.2, 1.3, 0.4, 1) 0.25s backwards; }
+
+    /* Snooze: the row nods and the bar refills */
+    li.anim-snooze { animation: nod 0.5s ease-out; }
+    li.anim-snooze .bar-fill { animation: refill 0.8s ease-out; }
+
+    /* Everything finished: the card glows and the counter bumps */
+    .card.celebrate { animation: glow 1.4s ease-out; }
+    #count.bump { animation: bump 0.5s ease-out; }
+
+    @keyframes pop {
+      0%   { transform: scale(1); }
+      40%  { transform: scale(1.4); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes flash-fade {
+      from { opacity: 1; }
+      to   { opacity: 0; }
+    }
+
+    @keyframes breathe {
+      0%, 100% { opacity: 0.45; }
+      50%      { opacity: 1; }
+    }
+
+    @keyframes jolt {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-5px); }
+      50% { transform: translateX(5px); }
+      75% { transform: translateX(-3px); }
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      12% { transform: translateX(-9px); }
+      24% { transform: translateX(8px); }
+      36% { transform: translateX(-7px); }
+      48% { transform: translateX(6px); }
+      60% { transform: translateX(-4px); }
+      72% { transform: translateX(3px); }
+      86% { transform: translateX(-1px); }
+    }
+
+    @keyframes flash-bad {
+      0%, 35% { background: var(--alert-tint-strong); }
+      100%    { background: var(--alert-tint); }
+    }
+
+    @keyframes stamp {
+      0%   { transform: scale(3) rotate(-14deg); opacity: 0; }
+      60%  { transform: scale(0.92) rotate(3deg); opacity: 1; }
+      100% { transform: scale(1) rotate(0); opacity: 1; }
+    }
+
+    @keyframes nod {
+      0%, 100% { transform: translateY(0); }
+      30% { transform: translateY(-5px); }
+      60% { transform: translateY(2px); }
+    }
+
+    @keyframes refill {
+      from { transform: scaleX(0); }
+    }
+
+    @keyframes glow {
+      0%, 100% { box-shadow: 0 8px 30px rgba(20, 40, 50, 0.08); }
+      35%      { box-shadow: 0 0 0 4px var(--good), 0 12px 44px var(--good-tint); }
+    }
+
+    @keyframes bump {
+      0%, 100% { transform: scale(1); }
+      40%      { transform: scale(1.12); }
+    }
+
+    /* Confetti pieces live in this layer, on top of everything */
+    #effects {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .confetti {
+      position: absolute;
+      width: 8px;
+      height: 12px;
+      border-radius: 2px;
+    }
+
+    /* The message bubble at the bottom of the screen */
+    #toast {
+      position: fixed;
+      left: 50%;
+      bottom: max(24px, env(safe-area-inset-bottom));
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: min(92vw, 420px);
+      padding: 12px 18px;
+      font-size: 16px;
+      line-height: 1.3;
+      color: #e6eef2;
+      background: #0f1d24;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      transform: translate(-50%, 24px);
+      pointer-events: none;
+      transition: opacity 0.25s, transform 0.35s cubic-bezier(0.2, 1.2, 0.4, 1);
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .toast-icon {
+      flex: none;
+      font-size: 20px;
+      line-height: 1;
+      color: #f2b84b;
+    }
+
+    #toast[data-kind="bad"] .toast-icon { color: #ff8a80; }
+
+    /* Message shown when the list is empty */
+    #empty {
+      margin: 20px 0 12px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    #clear-btn {
+      display: block;
+      margin: 12px auto 0;
+      padding: 6px 12px;
+      font-size: 15px;
+      color: var(--muted);
+      background: transparent;
+      border: none;
+      text-decoration: underline;
+    }
+
+    #clear-btn:disabled { opacity: 0.4; cursor: default; }
+
+    /* The "Install app" button. It only appears when the browser says the app can be installed. */
+    #install-btn {
+      display: block;
+      margin: 16px auto 0;
+      padding: 8px 20px;
+      font-weight: 600;
+      color: var(--accent-ink);
+      background: var(--accent);
+      border: none;
+      border-radius: 999px;
+    }
+
+    #install-btn[hidden] { display: none; }
+
+    #ios-hint { text-align: center; }
+
+    /* Text only screen readers need */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
+    /* Respect people who turn animations off on their device.
+       The colors and words still show what is happening. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition: none !important;
+        animation: none !important;
+      }
+    }
+  </style>
+</head>
+
+<!-- ============================================================
+     PAGE CONTENT (HTML): what is on the page
+     ============================================================ -->
+<body>
+  <main class="card">
+    <h1>To-do list</h1>
+    <p id="count" aria-live="polite"></p>
+
+    <div id="add-form" role="group" aria-label="Add a task">
+      <div class="add-row">
+        <label for="new-task" class="sr-only">New task</label>
+        <input id="new-task" type="text" placeholder="What needs doing?" maxlength="120" autocomplete="off">
+        <button type="button" id="add-btn">Add task</button>
+      </div>
+
+      <!-- The number is the time limit in seconds. 0 means no limit. -->
+      <div class="limit-row">
+        <label for="time-limit">Time limit</label>
+        <select id="time-limit">
+          <option value="0">No time limit</option>
+          <option value="30">30 seconds (quick test)</option>
+          <option value="300">5 minutes</option>
+          <option value="900">15 minutes</option>
+          <option value="1800">30 minutes</option>
+          <option value="3600">1 hour</option>
+          <option value="7200">2 hours</option>
+        </select>
+      </div>
+      <p id="limit-hint" class="hint"></p>
+    </div>
+
+    <div class="filters" role="group" aria-label="Show tasks">
+      <button type="button" data-filter="all" aria-pressed="true">All</button>
+      <button type="button" data-filter="active" aria-pressed="false">To do</button>
+      <button type="button" data-filter="done" aria-pressed="false">Done</button>
+    </div>
+
+    <ul id="list"></ul>
+    <p id="empty"></p>
+
+    <button type="button" id="clear-btn">Clear finished tasks</button>
+
+    <!-- Hidden until the browser says the app can be installed -->
+    <button type="button" id="install-btn" hidden>Install app</button>
+    <p id="ios-hint" class="hint" hidden>To install on iPhone or iPad: tap the Share button, then Add to Home Screen.</p>
+  </main>
+
+  <!-- Confetti is drawn here -->
+  <div id="effects" aria-hidden="true"></div>
+
+  <!-- Short messages ("Beat the clock!", "Time's up") appear here -->
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <!-- ============================================================
+       BEHAVIOR (JavaScript): what the page does
+       ============================================================ -->
+  <script>
+    // The browser remembers your tasks under this name, even after you close the page.
+    const STORAGE_KEY = "my-todo-tasks";
+
+    // ---------- Settings you can change ----------
+
+    const MAX_SNOOZES = 3;             // how many snoozes each task gets
+    const AUTO_SNOOZE_SECONDS = 10;    // when time is up, you have this long to pick a snooze
+    const MIN_SNOOZE_SECONDS = 5;      // a snooze is never shorter than this
+    const WARNING_FRACTION = 0.25;     // the timer turns amber in the last 25% of the time
+
+    // The three snooze choices. "fraction" is a share of the time you originally gave the task.
+    const SNOOZE_OPTIONS = [
+      { key: "half",  label: "Half",      words: "half the time",        fraction: 1 / 2 },
+      { key: "full",  label: "Full",      words: "the full time again",  fraction: 1 },
+      { key: "third", label: "One third", words: "one third of the time", fraction: 1 / 3 }
+    ];
+
+    // If you do not choose in time, this one starts by itself.
+    const DEFAULT_SNOOZE = "half";
+
+    // Grab the parts of the page we need to change.
+    const addBtn = document.getElementById("add-btn");
+    const input = document.getElementById("new-task");
+    const timeLimit = document.getElementById("time-limit");
+    const limitHint = document.getElementById("limit-hint");
+    const list = document.getElementById("list");
+    const countText = document.getElementById("count");
+    const emptyText = document.getElementById("empty");
+    const clearBtn = document.getElementById("clear-btn");
+    const filterButtons = document.querySelectorAll("[data-filter]");
+    const card = document.querySelector(".card");
+    const effects = document.getElementById("effects");
+    const toast = document.getElementById("toast");
+
+    // True when someone has "reduce motion" turned on in their device settings.
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    // Our data: a list of tasks. A task looks like this:
+    //   { id: 1, text: "Buy milk", done: false }
+    // A task with a time limit also has:
+    //   limitSec    the original time limit, in seconds
+    //   windowSec   the length of the current countdown (changes after a snooze)
+    //   deadline    the moment the countdown ends (a timestamp)
+    //   snoozesLeft how many snoozes are still available
+    let tasks = loadTasks();
+    let currentFilter = "all"; // "all", "active" or "done"
+
+    // Remembers the last state we drew for each task, so we can notice when one changes.
+    const shownState = {};
+    let toastTimer = null;
+
+    // ---------- Saving and loading ----------
+
+    function loadTasks() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        return Array.isArray(saved) ? saved : [];
+      } catch (error) {
+        return []; // If anything goes wrong, start with an empty list.
+      }
+    }
+
+    function saveTasks() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+      } catch (error) {
+        // Saving can fail in private browsing. The app still works, it just will not remember.
+      }
+    }
+
+    // ---------- Working out what state a task is in ----------
+
+    // Every task is always in exactly one of these states:
+    //   "plain"    no time limit
+    //   "running"  counting down
+    //   "warning"  counting down, last quarter of the time
+    //   "overdue"  time is up and snoozes are left: you have 10 seconds to pick one,
+    //              then a snooze starts by itself
+    //   "failed"   time is up and no snoozes are left
+    //   "done"     finished in time (or no limit)
+    //   "late"     finished after time ran out
+    function getState(task) {
+      if (task.done) return task.late ? "late" : "done";
+      if (!task.deadline) return "plain";
+
+      const left = task.deadline - Date.now();
+      if (left <= 0) return task.snoozesLeft > 0 ? "overdue" : "failed";
+
+      const total = (task.windowSec || task.limitSec) * 1000;
+      if (left <= total * WARNING_FRACTION) return "warning";
+      return "running";
+    }
+
+    function findTask(id) {
+      return tasks.find(function (t) { return t.id === id; });
+    }
+
+    // 75 becomes "1:15", 3700 becomes "1:01:40"
+    function formatTime(totalSeconds) {
+      const s = Math.max(0, Math.round(totalSeconds));
+      const hours = Math.floor(s / 3600);
+      const minutes = Math.floor((s % 3600) / 60);
+      const seconds = String(s % 60).padStart(2, "0");
+      if (hours > 0) return hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds;
+      return minutes + ":" + seconds;
+    }
+
+    function findOption(key) {
+      return SNOOZE_OPTIONS.find(function (o) { return o.key === key; });
+    }
+
+    // How many seconds a snooze gives this task, for "half", "full" or "third"
+    function snoozeSecondsFor(task, key) {
+      const option = findOption(key);
+      return Math.max(MIN_SNOOZE_SECONDS, Math.round(task.limitSec * option.fraction));
+    }
+
+    // Starts the next snooze. "startedAt" is the moment the snooze begins.
+    function startSnooze(task, key, startedAt) {
+      const seconds = snoozeSecondsFor(task, key);
+      task.deadline = startedAt + seconds * 1000;
+      task.windowSec = seconds;
+      task.snoozesLeft -= 1;
+      return seconds;
+    }
+
+    // Looks for tasks that have been overdue for 10 seconds with no choice made,
+    // and starts the default snooze for them. Returns the tasks it changed.
+    // If the page was closed for a long time, this catches up one snooze after another.
+    function applyAutoSnoozes() {
+      const changed = [];
+
+      tasks.forEach(function (task) {
+        if (task.done || !task.deadline) return;
+
+        let started = false;
+        while (task.snoozesLeft > 0 && Date.now() >= task.deadline + AUTO_SNOOZE_SECONDS * 1000) {
+          startSnooze(task, DEFAULT_SNOOZE, task.deadline + AUTO_SNOOZE_SECONDS * 1000);
+          started = true;
+        }
+        if (started) changed.push(task);
+      });
+
+      if (changed.length > 0) saveTasks();
+      return changed;
+    }
+
+    // The words shown next to each task's clock
+    function describeTimer(task, state) {
+      if (state === "done") return "Finished with " + formatTime(task.spareSec || 0) + " to spare";
+      if (state === "late") return "Finished late";
+      if (state === "failed") return "Out of time and out of snoozes";
+      if (state === "overdue") {
+        const autoIn = Math.max(0, Math.ceil((task.deadline + AUTO_SNOOZE_SECONDS * 1000 - Date.now()) / 1000));
+        return "Time\u2019s up! Auto-snooze in " + autoIn + "s";
+      }
+      const left = Math.ceil((task.deadline - Date.now()) / 1000);
+      return formatTime(left) + " left";
+    }
+
+    // ---------- Changing the data ----------
+
+    function addTask(text, limitSec) {
+      const task = { id: Date.now(), text: text, done: false };
+      if (limitSec > 0) {
+        task.limitSec = limitSec;
+        task.windowSec = limitSec;
+        task.deadline = Date.now() + limitSec * 1000;
+        task.snoozesLeft = MAX_SNOOZES;
+      }
+      tasks.push(task);
+      saveTasks();
+      render();
+    }
+
+    // "box" is where the checkbox was on screen, so confetti can burst from it.
+    function toggleTask(id, box) {
+      const task = findTask(id);
+      if (!task) return;
+
+      task.done = !task.done;
+
+      if (task.done) {
+        if (task.deadline) {
+          const left = task.deadline - Date.now();
+          task.late = left <= 0;
+          task.spareSec = Math.max(0, Math.floor(left / 1000));
+        }
+      } else {
+        delete task.late;
+        delete task.spareSec;
+      }
+
+      saveTasks();
+      render();
+      if (task.done) celebrate(task, box);
+    }
+
+    // "key" is the option you tapped: "half", "full" or "third"
+    function snoozeTask(id, key) {
+      const task = findTask(id);
+      if (!task || getState(task) !== "overdue" || !findOption(key)) return;
+
+      const seconds = startSnooze(task, key, Date.now());
+
+      saveTasks();
+      render();
+      animateRow(id, "anim-snooze");
+
+      let message = "Snoozed for " + findOption(key).words + " (" + formatTime(seconds) + "). ";
+      if (task.snoozesLeft === 0) {
+        message += "That was your last snooze.";
+      } else {
+        message += task.snoozesLeft + (task.snoozesLeft === 1 ? " snooze left." : " snoozes left.");
+      }
+      showToast("\u263E", message, "bad");
+    }
+
+    function deleteTask(id) {
+      tasks = tasks.filter(function (t) { return t.id !== id; });
+      saveTasks();
+      render();
+    }
+
+    function clearFinished() {
+      tasks = tasks.filter(function (t) { return !t.done; });
+      saveTasks();
+      render();
+    }
+
+    // ---------- Drawing the page ----------
+
+    // Small helpers that build the timer parts of a task row
+    function makeMeta(task, state) {
+      const meta = document.createElement("div");
+      meta.className = "meta";
+
+      if (state === "failed") {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = "Missed";
+        meta.appendChild(badge);
+      }
+
+      const timer = document.createElement("span");
+      timer.className = "timer";
+      meta.appendChild(timer);
+
+      if (!task.done) {
+        const dots = document.createElement("span");
+        dots.className = "dots";
+        dots.setAttribute("role", "img");
+        dots.setAttribute("aria-label", task.snoozesLeft + " of " + MAX_SNOOZES + " snoozes left");
+
+        const word = document.createElement("span");
+        word.textContent = "Snoozes";
+        dots.appendChild(word);
+
+        for (let i = 0; i < MAX_SNOOZES; i++) {
+          const dot = document.createElement("i");
+          if (i >= task.snoozesLeft) dot.className = "used";
+          dots.appendChild(dot);
+        }
+        meta.appendChild(dots);
+      }
+      return meta;
+    }
+
+    function makeBar() {
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      const fill = document.createElement("div");
+      fill.className = "bar-fill";
+      bar.appendChild(fill);
+      return bar;
+    }
+
+    // Three buttons: half, full, one third. The default one is filled in.
+    function makeSnoozeRow(task) {
+      const row = document.createElement("div");
+      row.className = "snooze-row";
+
+      SNOOZE_OPTIONS.forEach(function (option) {
+        const seconds = snoozeSecondsFor(task, option.key);
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "snooze";
+        if (option.key === DEFAULT_SNOOZE) button.classList.add("default");
+        button.dataset.id = task.id;
+        button.dataset.snooze = option.key;
+        button.setAttribute("aria-label", "Snooze for " + option.words + ", " + formatTime(seconds));
+
+        const name = document.createElement("span");
+        name.textContent = option.label;
+        const time = document.createElement("span");
+        time.className = "snooze-time";
+        time.textContent = formatTime(seconds);
+
+        button.append(name, time);
+        row.appendChild(button);
+      });
+
+      return row;
+    }
+
+    // Updates the clock words and the bar inside one task row
+    function fillTimer(li, task, state) {
+      const timer = li.querySelector(".timer");
+      if (timer) timer.textContent = describeTimer(task, state);
+
+      const fill = li.querySelector(".bar-fill");
+      if (fill) {
+        let total = (task.windowSec || task.limitSec) * 1000;
+        let left = task.deadline - Date.now();
+
+        // While overdue, the bar shows the 10 seconds left to choose a snooze
+        if (state === "overdue") {
+          total = AUTO_SNOOZE_SECONDS * 1000;
+          left = task.deadline + total - Date.now();
+        }
+
+        fill.style.setProperty("--p", Math.max(0, Math.min(1, left / total)));
+      }
+    }
+
+    // render() rebuilds everything on screen from the tasks list.
+    // Call it after any change, and the page always matches the data.
+    function render() {
+      // 1. Work out which tasks to show
+      const visible = tasks.filter(function (t) {
+        if (currentFilter === "active") return !t.done;
+        if (currentFilter === "done") return t.done;
+        return true;
+      });
+
+      // 2. Draw the list
+      list.innerHTML = "";
+      visible.forEach(function (task) {
+        const state = getState(task);
+
+        const li = document.createElement("li");
+        li.dataset.id = task.id;
+        if (state === "done" || state === "late") li.classList.add("done");
+        if (state === "late" || state === "warning" || state === "overdue" || state === "failed") {
+          li.classList.add(state);
+        }
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.id = "task-" + task.id;
+        checkbox.checked = task.done;
+        checkbox.dataset.id = task.id;
+
+        const label = document.createElement("label");
+        label.htmlFor = checkbox.id;
+        label.textContent = task.text; // textContent keeps typed text safe
+
+        // The task text, plus timer info if this task has a time limit
+        const body = document.createElement("div");
+        body.className = "task-body";
+        body.appendChild(label);
+        if (task.deadline) {
+          body.appendChild(makeMeta(task, state));
+          if (!task.done) body.appendChild(makeBar());
+          if (state === "overdue") body.appendChild(makeSnoozeRow(task));
+        }
+
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "delete";
+        del.textContent = "\u00d7";
+        del.dataset.id = task.id;
+        del.setAttribute("aria-label", "Delete task: " + task.text);
+
+        li.append(checkbox, body, del);
+        list.appendChild(li);
+
+        if (task.deadline) fillTimer(li, task, state);
+      });
+
+      // Remember what we just drew, so tick() can spot changes later
+      tasks.forEach(function (t) { shownState[t.id] = getState(t); });
+
+      // 3. Update the counter under the title
+      const left = tasks.filter(function (t) { return !t.done; }).length;
+      const missed = tasks.filter(function (t) { return getState(t) === "failed"; }).length;
+      if (tasks.length === 0) {
+        countText.textContent = "No tasks yet";
+      } else if (left === 0) {
+        countText.textContent = "All done";
+      } else {
+        let text = left + (left === 1 ? " task left" : " tasks left");
+        if (missed > 0) text += ", " + missed + " missed";
+        countText.textContent = text;
+      }
+
+      // 4. Show a helpful message if the list is empty
+      if (visible.length > 0) {
+        emptyText.textContent = "";
+      } else if (currentFilter === "active") {
+        emptyText.textContent = "Nothing left to do.";
+      } else if (currentFilter === "done") {
+        emptyText.textContent = "No finished tasks yet.";
+      } else {
+        emptyText.textContent = "Your list is empty. Add your first task above.";
+      }
+
+      // 5. Update the filter buttons and the clear button
+      filterButtons.forEach(function (btn) {
+        btn.setAttribute("aria-pressed", btn.dataset.filter === currentFilter);
+      });
+      clearBtn.disabled = !tasks.some(function (t) { return t.done; });
+    }
+
+    // ---------- The clock ----------
+
+    // Runs once a second. If a task changed state (for example, time just ran out),
+    // it redraws and plays the right animation. Otherwise it only updates the numbers,
+    // so nothing flickers.
+    function tick() {
+      // First, start a snooze for any task that has waited 10 seconds without a choice
+      const autoSnoozed = applyAutoSnoozes();
+
+      const affected = tasks.filter(function (t) {
+        return autoSnoozed.indexOf(t) !== -1 || getState(t) !== shownState[t.id];
+      });
+
+      if (affected.length === 0) {
+        updateTimers();
+        return;
+      }
+
+      render();
+      affected.forEach(function (task) {
+        const state = getState(task);
+        if (state === "overdue" || state === "failed") {
+          announceChange(task, state);
+        } else if (autoSnoozed.indexOf(task) !== -1) {
+          announceAutoSnooze(task);
+        }
+      });
+    }
+
+    function announceAutoSnooze(task) {
+      animateRow(task.id, "anim-snooze");
+      showToast("\u263E", "Auto-snooze started: " + shorten(task.text, 40) + " gets " + formatTime(task.windowSec) + " more.", "bad");
+    }
+
+    function updateTimers() {
+      list.querySelectorAll("li[data-id]").forEach(function (li) {
+        const task = findTask(Number(li.dataset.id));
+        if (!task || !task.deadline || task.done) return;
+        fillTimer(li, task, getState(task));
+      });
+    }
+
+    function announceChange(task, state) {
+      const name = shorten(task.text, 40);
+
+      if (state === "overdue") {
+        animateRow(task.id, "anim-overdue");
+        showToast("!", "Time\u2019s up: " + name + ". Pick a snooze, or half the time starts in " + AUTO_SNOOZE_SECONDS + "s.", "bad");
+      } else if (state === "failed") {
+        animateRow(task.id, "anim-fail");
+        showToast("\u2715", "Missed: " + name, "bad");
+      }
+    }
+
+    // ---------- Animations and messages ----------
+
+    // Adds an animation class to one task row for a moment, then takes it away.
+    function animateRow(id, className) {
+      const li = list.querySelector('li[data-id="' + id + '"]');
+      if (!li) return;
+      li.classList.add(className);
+      setTimeout(function () { li.classList.remove(className); }, 1600);
+    }
+
+    // Shows a message at the bottom of the screen for a few seconds.
+    function showToast(icon, message, kind) {
+      const iconEl = document.createElement("span");
+      iconEl.className = "toast-icon";
+      iconEl.setAttribute("aria-hidden", "true");
+      iconEl.textContent = icon;
+
+      const textEl = document.createElement("span");
+      textEl.textContent = message;
+
+      toast.replaceChildren(iconEl, textEl);
+      toast.dataset.kind = kind;
+      toast.classList.add("show");
+
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 3600);
+    }
+
+    function shorten(text, max) {
+      return text.length > max ? text.slice(0, max - 1) + "\u2026" : text;
+    }
+
+    // Decides how big the celebration is and what the message says.
+    function achievement(task, allDone) {
+      if (allDone) {
+        return { icon: "\u2605", text: "All done! Clean sweep.", confetti: 40 };
+      }
+      if (task.late) {
+        return { icon: "\u2713", text: "Finished late. Better than never.", confetti: 0 };
+      }
+      if (task.deadline) {
+        const spare = formatTime(task.spareSec);
+        if (task.snoozesLeft < MAX_SNOOZES) {
+          return { icon: "\u2605", text: "Phew! Saved by the snooze.", confetti: 14 };
+        }
+        if (task.spareSec >= task.limitSec * 0.5) {
+          return { icon: "\u26A1", text: "Lightning fast! " + spare + " to spare.", confetti: 32 };
+        }
+        return { icon: "\u2605", text: "Beat the clock! " + spare + " to spare.", confetti: 22 };
+      }
+      return { icon: "\u2713", text: "Task complete.", confetti: 16 };
+    }
+
+    function celebrate(task, box) {
+      const allDone = tasks.every(function (t) { return t.done; });
+      const win = achievement(task, allDone);
+
+      if (!task.late) animateRow(task.id, "anim-win");
+
+      if (win.confetti > 0 && box) {
+        burst(box.left + box.width / 2, box.top + box.height / 2, win.confetti);
+      }
+
+      if (allDone) {
+        rain(70);
+        card.classList.add("celebrate");
+        countText.classList.add("bump");
+        setTimeout(function () {
+          card.classList.remove("celebrate");
+          countText.classList.remove("bump");
+        }, 1500);
+      }
+
+      showToast(win.icon, win.text, "win");
+    }
+
+    const CONFETTI_COLORS = ["#f2b84b", "#e8604c", "#4fb8c0", "#7bd389", "#9b8cff", "#ff8fb1"];
+
+    // Confetti that flies out from one point (the checkbox you just ticked)
+    function burst(x, y, count) {
+      if (reduceMotion.matches) return;
+
+      for (let i = 0; i < count; i++) {
+        const piece = document.createElement("span");
+        piece.className = "confetti";
+        piece.style.left = x + "px";
+        piece.style.top = y + "px";
+        piece.style.background = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
+        effects.appendChild(piece);
+
+        const angle = Math.random() * Math.PI * 2;
+        const distance = 60 + Math.random() * 100;
+        const dx = Math.cos(angle) * distance;
+        const dy = Math.sin(angle) * distance - 40; // fly upward a little first
+        const spin = Math.random() * 720 - 360;
+
+        // piece.animate() moves the piece from one spot to another, then we delete it
+        const motion = piece.animate([
+          { transform: "translate(0, 0) rotate(0deg)", opacity: 1 },
+          { transform: "translate(" + dx + "px, " + dy + "px) rotate(" + spin / 2 + "deg)", opacity: 1, offset: 0.6 },
+          { transform: "translate(" + dx * 1.1 + "px, " + (dy + 90) + "px) rotate(" + spin + "deg)", opacity: 0 }
+        ], { duration: 900 + Math.random() * 500, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" });
+
+        motion.onfinish = function () { piece.remove(); };
+      }
+    }
+
+    // Confetti that falls from the top of the screen (for finishing everything)
+    function rain(count) {
+      if (reduceMotion.matches) return;
+
+      for (let i = 0; i < count; i++) {
+        const piece = document.createElement("span");
+        piece.className = "confetti";
+        piece.style.left = Math.random() * window.innerWidth + "px";
+        piece.style.top = "-20px";
+        piece.style.background = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
+        effects.appendChild(piece);
+
+        const sway = Math.random() * 120 - 60;
+        const spin = Math.random() * 900 - 450;
+
+        const motion = piece.animate([
+          { transform: "translate(0, 0) rotate(0deg)" },
+          { transform: "translate(" + sway + "px, " + (window.innerHeight + 60) + "px) rotate(" + spin + "deg)" }
+        ], {
+          duration: 1800 + Math.random() * 1400,
+          delay: Math.random() * 700,
+          easing: "ease-in",
+          fill: "backwards"
+        });
+
+        motion.onfinish = function () { piece.remove(); };
+      }
+    }
+
+    // ---------- Reacting to clicks and typing ----------
+
+    // Add a task from whatever is typed in the box.
+    // We do not use a <form> here, because some places that show web pages
+    // (like preview panes) block forms and the button would do nothing.
+    function submitTask() {
+      const text = input.value.trim();
+      if (text === "") return;
+      addTask(text, Number(timeLimit.value));
+      input.value = "";
+      input.focus();
+    }
+
+    addBtn.addEventListener("click", submitTask);
+
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        submitTask();
+      }
+    });
+
+    // Explain the snooze rule under the picker whenever a time limit is chosen
+    function updateHint() {
+      limitHint.textContent = Number(timeLimit.value) === 0
+        ? ""
+        : "If time runs out you get " + MAX_SNOOZES + " snoozes. Choose half, full or one third of your time within "
+          + AUTO_SNOOZE_SECONDS + " seconds, or half starts on its own.";
+    }
+    timeLimit.addEventListener("change", updateHint);
+    updateHint();
+
+    // One listener on the whole list handles every checkbox and button
+    list.addEventListener("change", function (event) {
+      if (event.target.matches("input[type='checkbox']")) {
+        toggleTask(Number(event.target.dataset.id), event.target.getBoundingClientRect());
+      }
+    });
+
+    list.addEventListener("click", function (event) {
+      const button = event.target.closest("button");
+      if (!button) return;
+
+      const id = Number(button.dataset.id);
+      if (button.classList.contains("delete")) deleteTask(id);
+      if (button.classList.contains("snooze")) snoozeTask(id, button.dataset.snooze);
+    });
+
+    filterButtons.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        currentFilter = btn.dataset.filter;
+        render();
+      });
+    });
+
+    clearBtn.addEventListener("click", clearFinished);
+
+    // ---------- Installing the app (PWA) ----------
+
+    const installBtn = document.getElementById("install-btn");
+    const iosHint = document.getElementById("ios-hint");
+    let installPrompt = null; // the browser hands us this when the app can be installed
+
+    // True when the app is already running as an installed app.
+    const isInstalled = window.matchMedia("(display-mode: standalone)").matches
+      || window.navigator.standalone === true;
+
+    // Chrome, Edge and Android fire this event when the app is installable.
+    // We keep it and show our own "Install app" button instead.
+    window.addEventListener("beforeinstallprompt", function (event) {
+      event.preventDefault();
+      installPrompt = event;
+      if (!isInstalled) installBtn.hidden = false;
+    });
+
+    installBtn.addEventListener("click", function () {
+      if (!installPrompt) return;
+      installPrompt.prompt(); // shows the browser's install question
+      installPrompt.userChoice.then(function () {
+        installPrompt = null;
+        installBtn.hidden = true;
+      });
+    });
+
+    window.addEventListener("appinstalled", function () {
+      installBtn.hidden = true;
+      showToast("\u2713", "App installed. Open it from your home screen.", "win");
+    });
+
+    // iPhones and iPads have no install event, so we show a hint instead.
+    const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent)
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (isIos && !isInstalled) iosHint.hidden = false;
+
+    // The service worker (sw.js) saves the app so it opens with no internet.
+    // If it cannot start (for example in a preview pane), the app still works normally.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("sw.js").catch(function () {});
+      });
+    }
+
+    // The "Add a task" shortcut (long-press the app icon) opens the page with ?action=add
+    if (new URLSearchParams(window.location.search).get("action") === "add") {
+      input.focus();
+    }
+
+    // Catch up on anything that ran out while the page was closed,
+    // draw the page for the first time, then start the clock
+    applyAutoSnoozes();
+    render();
+    setInterval(tick, 1000);
+
+    // Browsers slow timers down in background tabs, so catch up when you come back
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) tick();
+    });
+  </script>
+</body>
+</html>
