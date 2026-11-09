@@ -622,6 +622,63 @@
 
     #ios-hint { text-align: center; }
 
+    /* The sign-in area: a small link, and a panel that opens when you tap it */
+    #account {
+      margin-top: 16px;
+      text-align: center;
+    }
+
+    #account-toggle {
+      padding: 6px 12px;
+      font-size: 15px;
+      color: var(--muted);
+      background: transparent;
+      border: none;
+      text-decoration: underline;
+    }
+
+    #account-toggle[hidden] { display: none; }
+
+    #account-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: 320px;
+      margin: 10px auto 0;
+      text-align: left;
+    }
+
+    #account-panel[hidden] { display: none; }
+
+    #account-panel input {
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 16px;
+      color: var(--ink);
+      background: transparent;
+      border: 1.5px solid var(--line);
+      border-radius: 10px;
+    }
+
+    #account-panel input::placeholder { color: var(--muted); }
+
+    .auth-buttons { display: flex; gap: 8px; }
+
+    .auth-buttons button {
+      flex: 1;
+      padding: 10px;
+      font-weight: 600;
+      color: var(--accent);
+      background: transparent;
+      border: 1.5px solid var(--accent);
+      border-radius: 10px;
+    }
+
+    #signin-btn {
+      color: var(--accent-ink);
+      background: var(--accent);
+    }
+
     /* Text only screen readers need */
     .sr-only {
       position: absolute;
@@ -685,6 +742,25 @@
 
     <button type="button" id="clear-btn">Clear finished tasks</button>
 
+    <!-- Sign in to keep your tasks in your online account and see them on every device.
+         This is a plain group, not a form, because forms get blocked in some preview panes. -->
+    <section id="account" aria-label="Account and sync">
+      <p id="sync-status" class="hint" role="status"></p>
+      <button type="button" id="account-toggle">Sign in to sync across devices</button>
+
+      <div id="account-panel" hidden>
+        <label for="auth-email" class="sr-only">Email</label>
+        <input id="auth-email" type="email" placeholder="Email" autocomplete="email">
+        <label for="auth-password" class="sr-only">Password</label>
+        <input id="auth-password" type="password" placeholder="Password (6 or more characters)" autocomplete="current-password">
+        <div class="auth-buttons">
+          <button type="button" id="signin-btn">Sign in</button>
+          <button type="button" id="signup-btn">Create account</button>
+        </div>
+        <p id="auth-message" class="hint" role="status"></p>
+      </div>
+    </section>
+
     <!-- Hidden until the browser says the app can be installed -->
     <button type="button" id="install-btn" hidden>Install app</button>
     <p id="ios-hint" class="hint" hidden>To install on iPhone or iPad: tap the Share button, then Add to Home Screen.</p>
@@ -696,12 +772,19 @@
   <!-- Short messages ("Beat the clock!", "Time's up") appear here -->
   <div id="toast" role="status" aria-live="polite"></div>
 
+  <!-- The Supabase library: it talks to your online database.
+       It is pinned to one exact version so it never changes under you.
+       If it cannot load, the app still works on this device, just without syncing. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.3" crossorigin="anonymous"></script>
+
   <!-- ============================================================
        BEHAVIOR (JavaScript): what the page does
        ============================================================ -->
   <script>
     // The browser remembers your tasks under this name, even after you close the page.
     const STORAGE_KEY = "my-todo-tasks";
+    const DELETES_KEY = "my-todo-pending-deletes";  // tasks deleted here that still need deleting online
+    const SNOOZE_LOG_KEY = "my-todo-snooze-log";    // snoozes that still need saving online
 
     // ---------- Settings you can change ----------
 
@@ -719,6 +802,26 @@
 
     // If you do not choose in time, this one starts by itself.
     const DEFAULT_SNOOZE = "half";
+
+    // ---------- Your Supabase project ----------
+
+    // The URL and the publishable key are meant to be public. They are safe to keep in a web page.
+    // What protects your data is the Row Level Security in your database, not hiding this key.
+    // NEVER put the "secret" key or the "service_role" key in this file.
+    const SUPABASE_URL = "https://bxjjwtondrqhaytcniwj.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_-5wXqfKcSt7C6EhSKT_eZw_94_wxp_6";
+
+    // "window.supabase" comes from the script tag near the bottom of the page.
+    // If it did not load (for example, the very first visit was offline), cloud stays null
+    // and the app simply works on this device only.
+    let cloud = null;
+    try {
+      if (window.supabase && window.supabase.createClient) {
+        cloud = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      }
+    } catch (error) {
+      cloud = null;
+    }
 
     // Grab the parts of the page we need to change.
     const addBtn = document.getElementById("add-btn");
@@ -738,13 +841,20 @@
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     // Our data: a list of tasks. A task looks like this:
-    //   { id: 1, text: "Buy milk", done: false }
+    //   { id: "3f2b...", text: "Buy milk", done: false, createdAt: 1700000000000 }
+    // The id is a random unique ID (a uuid), the same kind the database uses.
+    // Behind the scenes each task also has:
+    //   dirty   true means "changed here, not uploaded yet"
+    //   synced  true means "this task exists online"
+    //   rev     a counter that goes up on every change
     // A task with a time limit also has:
     //   limitSec    the original time limit, in seconds
     //   windowSec   the length of the current countdown (changes after a snooze)
     //   deadline    the moment the countdown ends (a timestamp)
     //   snoozesLeft how many snoozes are still available
     let tasks = loadTasks();
+    let pendingDeletes = loadList(DELETES_KEY); // ids to delete online
+    let snoozeLog = loadList(SNOOZE_LOG_KEY);   // snoozes to save online
     let currentFilter = "all"; // "all", "active" or "done"
 
     // Remembers the last state we drew for each task, so we can notice when one changes.
@@ -756,10 +866,49 @@
     function loadTasks() {
       try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-        return Array.isArray(saved) ? saved : [];
+        if (!Array.isArray(saved)) return [];
+
+        // Older versions used a number as the id. The database needs a unique ID (a uuid),
+        // so upgrade those tasks once. The old number was the creation time, so keep it.
+        saved.forEach(function (task) {
+          if (typeof task.id !== "string") {
+            task.createdAt = task.createdAt || Number(task.id) || Date.now();
+            task.id = newId();
+            task.dirty = true;
+          }
+          if (!task.createdAt) task.createdAt = Date.now();
+        });
+        return saved;
       } catch (error) {
         return []; // If anything goes wrong, start with an empty list.
       }
+    }
+
+    // A simple list (used for the "to delete online" and "snoozes to save" queues)
+    function loadList(key) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(key));
+        return Array.isArray(saved) ? saved : [];
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function saveList(key, items) {
+      try {
+        localStorage.setItem(key, JSON.stringify(items));
+      } catch (error) {
+        // Same as saveTasks: if saving fails, the app still works.
+      }
+    }
+
+    // Makes a random unique ID like "3f2b8c1e-9d4a-4f6b-8a1c-2e5d7b9f0a3c"
+    function newId() {
+      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+        const r = Math.floor(Math.random() * 16);
+        return (c === "x" ? r : (r & 3) | 8).toString(16);
+      });
     }
 
     function saveTasks() {
@@ -768,6 +917,24 @@
       } catch (error) {
         // Saving can fail in private browsing. The app still works, it just will not remember.
       }
+    }
+
+    // Call touch(task) whenever a task changes: it marks the task as "needs uploading".
+    function touch(task) {
+      task.dirty = true;
+      task.rev = (task.rev || 0) + 1;
+    }
+
+    // A task needs uploading if it changed here, or if it was never uploaded at all.
+    // This is a safety net: a task that never reached your account is never thrown away.
+    function needsUpload(task) {
+      return task.dirty || !task.synced;
+    }
+
+    // Save on this device, then (if signed in) start an online sync a moment later.
+    function commit() {
+      saveTasks();
+      scheduleSync();
     }
 
     // ---------- Working out what state a task is in ----------
@@ -817,12 +984,20 @@
       return Math.max(MIN_SNOOZE_SECONDS, Math.round(task.limitSec * option.fraction));
     }
 
-    // Starts the next snooze. "startedAt" is the moment the snooze begins.
-    function startSnooze(task, key, startedAt) {
+    // Starts the next snooze. "startedAt" is the moment the snooze begins,
+    // and "wasAuto" is true when it started by itself.
+    function startSnooze(task, key, startedAt, wasAuto) {
       const seconds = snoozeSecondsFor(task, key);
       task.deadline = startedAt + seconds * 1000;
       task.windowSec = seconds;
       task.snoozesLeft -= 1;
+      touch(task);
+
+      // Keep a record of this snooze, to be saved online later
+      snoozeLog.push({ taskId: task.id, choice: key, seconds: seconds, auto: !!wasAuto, at: startedAt });
+      if (snoozeLog.length > 500) snoozeLog.shift(); // never let this grow forever
+      saveList(SNOOZE_LOG_KEY, snoozeLog);
+
       return seconds;
     }
 
@@ -837,13 +1012,13 @@
 
         let started = false;
         while (task.snoozesLeft > 0 && Date.now() >= task.deadline + AUTO_SNOOZE_SECONDS * 1000) {
-          startSnooze(task, DEFAULT_SNOOZE, task.deadline + AUTO_SNOOZE_SECONDS * 1000);
+          startSnooze(task, DEFAULT_SNOOZE, task.deadline + AUTO_SNOOZE_SECONDS * 1000, true);
           started = true;
         }
         if (started) changed.push(task);
       });
 
-      if (changed.length > 0) saveTasks();
+      if (changed.length > 0) commit();
       return changed;
     }
 
@@ -863,7 +1038,7 @@
     // ---------- Changing the data ----------
 
     function addTask(text, limitSec) {
-      const task = { id: Date.now(), text: text, done: false };
+      const task = { id: newId(), text: text, done: false, createdAt: Date.now(), dirty: true, rev: 1 };
       if (limitSec > 0) {
         task.limitSec = limitSec;
         task.windowSec = limitSec;
@@ -871,7 +1046,7 @@
         task.snoozesLeft = MAX_SNOOZES;
       }
       tasks.push(task);
-      saveTasks();
+      commit();
       render();
     }
 
@@ -888,12 +1063,15 @@
           task.late = left <= 0;
           task.spareSec = Math.max(0, Math.floor(left / 1000));
         }
+        task.completedAt = Date.now();
       } else {
         delete task.late;
         delete task.spareSec;
+        delete task.completedAt;
       }
 
-      saveTasks();
+      touch(task);
+      commit();
       render();
       if (task.done) celebrate(task, box);
     }
@@ -903,9 +1081,9 @@
       const task = findTask(id);
       if (!task || getState(task) !== "overdue" || !findOption(key)) return;
 
-      const seconds = startSnooze(task, key, Date.now());
+      const seconds = startSnooze(task, key, Date.now(), false);
 
-      saveTasks();
+      commit();
       render();
       animateRow(id, "anim-snooze");
 
@@ -918,16 +1096,30 @@
       showToast("\u263E", message, "bad");
     }
 
-    function deleteTask(id) {
-      tasks = tasks.filter(function (t) { return t.id !== id; });
-      saveTasks();
+    // Removes tasks here, and remembers to delete them online too (if they were ever uploaded).
+    function removeTasks(removed) {
+      const ids = removed.map(function (t) { return t.id; });
+
+      removed.forEach(function (task) {
+        if (task.synced) pendingDeletes.push(task.id);
+      });
+
+      tasks = tasks.filter(function (t) { return ids.indexOf(t.id) === -1; });
+      snoozeLog = snoozeLog.filter(function (e) { return ids.indexOf(e.taskId) === -1; });
+      saveList(DELETES_KEY, pendingDeletes);
+      saveList(SNOOZE_LOG_KEY, snoozeLog);
+
+      commit();
       render();
     }
 
+    function deleteTask(id) {
+      const task = findTask(id);
+      if (task) removeTasks([task]);
+    }
+
     function clearFinished() {
-      tasks = tasks.filter(function (t) { return !t.done; });
-      saveTasks();
-      render();
+      removeTasks(tasks.filter(function (t) { return t.done; }));
     }
 
     // ---------- Drawing the page ----------
@@ -1151,7 +1343,7 @@
 
     function updateTimers() {
       list.querySelectorAll("li[data-id]").forEach(function (li) {
-        const task = findTask(Number(li.dataset.id));
+        const task = findTask(li.dataset.id);
         if (!task || !task.deadline || task.done) return;
         fillTimer(li, task, getState(task));
       });
@@ -1340,7 +1532,7 @@
     // One listener on the whole list handles every checkbox and button
     list.addEventListener("change", function (event) {
       if (event.target.matches("input[type='checkbox']")) {
-        toggleTask(Number(event.target.dataset.id), event.target.getBoundingClientRect());
+        toggleTask(event.target.dataset.id, event.target.getBoundingClientRect());
       }
     });
 
@@ -1348,7 +1540,7 @@
       const button = event.target.closest("button");
       if (!button) return;
 
-      const id = Number(button.dataset.id);
+      const id = button.dataset.id;
       if (button.classList.contains("delete")) deleteTask(id);
       if (button.classList.contains("snooze")) snoozeTask(id, button.dataset.snooze);
     });
@@ -1361,6 +1553,348 @@
     });
 
     clearBtn.addEventListener("click", clearFinished);
+
+    // ---------- Syncing with Supabase ----------
+
+    // How it works, in short:
+    //  - Every change is saved on this device first, so the app stays fast and works offline.
+    //  - Changed tasks are marked "dirty". When you are signed in and online, we upload
+    //    the dirty tasks, then download the full list from your account.
+    //  - The online copy is the master copy, so a task you delete on your phone also
+    //    disappears from your computer.
+
+    let session = null;       // the signed-in user's session, or null when signed out
+    let syncPromise = null;   // set while a sync is running
+    let syncAgain = false;    // true if something changed while a sync was running
+    let syncTimer = null;
+    let syncState = "idle";   // "idle", "syncing", "synced", "offline" or "error"
+
+    const accountToggle = document.getElementById("account-toggle");
+    const accountPanel = document.getElementById("account-panel");
+    const authEmail = document.getElementById("auth-email");
+    const authPassword = document.getElementById("auth-password");
+    const signinBtn = document.getElementById("signin-btn");
+    const signupBtn = document.getElementById("signup-btn");
+    const authMessage = document.getElementById("auth-message");
+    const syncStatus = document.getElementById("sync-status");
+
+    // Our task shape -> the database row shape (see schema.sql)
+    function toRow(task) {
+      return {
+        id: task.id,
+        title: task.text,
+        done: task.done,
+        limit_seconds: task.limitSec || null,
+        window_seconds: task.deadline ? task.windowSec : null,
+        deadline: task.deadline ? new Date(task.deadline).toISOString() : null,
+        snoozes_left: task.deadline ? task.snoozesLeft : null,
+        late: task.late === undefined ? null : task.late,
+        spare_seconds: task.spareSec === undefined ? null : task.spareSec,
+        completed_at: task.completedAt ? new Date(task.completedAt).toISOString() : null,
+        created_at: new Date(task.createdAt).toISOString()
+      };
+    }
+
+    // The database row shape -> our task shape
+    function fromRow(row) {
+      const task = {
+        id: row.id,
+        text: row.title,
+        done: row.done,
+        createdAt: Date.parse(row.created_at),
+        synced: true,
+        dirty: false,
+        rev: 0
+      };
+      if (row.limit_seconds) {
+        task.limitSec = row.limit_seconds;
+        task.windowSec = row.window_seconds;
+        task.deadline = Date.parse(row.deadline);
+        task.snoozesLeft = row.snoozes_left;
+      }
+      if (row.late !== null) task.late = row.late;
+      if (row.spare_seconds !== null) task.spareSec = row.spare_seconds;
+      if (row.completed_at) task.completedAt = Date.parse(row.completed_at);
+      return task;
+    }
+
+    // A short fingerprint of what is on screen, so we only redraw when something really changed
+    function fingerprint() {
+      return JSON.stringify(tasks.map(function (t) {
+        return [t.id, t.text, t.done, t.deadline, t.windowSec, t.snoozesLeft, t.late, t.spareSec];
+      }));
+    }
+
+    function setSyncState(state) {
+      syncState = state;
+
+      if (!cloud) {
+        syncStatus.textContent = "Online sync is not available right now.";
+        return;
+      }
+      if (!session) {
+        syncStatus.textContent = "";
+        return;
+      }
+
+      const messages = {
+        idle: "",
+        syncing: "Syncing\u2026",
+        synced: "Synced",
+        offline: "Offline. Changes will sync when you are back online.",
+        error: "Could not sync. Trying again soon."
+      };
+      syncStatus.textContent = ("Signed in as " + session.user.email + ". " + messages[state]).trim();
+    }
+
+    // Waits a moment (so quick changes go up together), then syncs.
+    function scheduleSync() {
+      if (!cloud || !session) return;
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(syncNow, 800);
+    }
+
+    // Starts a sync, or joins the one already running.
+    function syncNow() {
+      if (!cloud || !session) return Promise.resolve();
+
+      if (syncPromise) {
+        syncAgain = true;
+        return syncPromise;
+      }
+
+      syncPromise = runSync().then(function () {
+        syncPromise = null;
+        if (syncAgain) {
+          syncAgain = false;
+          scheduleSync();
+        }
+      });
+      return syncPromise;
+    }
+
+    async function runSync() {
+      if (!navigator.onLine) {
+        setSyncState("offline");
+        return;
+      }
+
+      setSyncState("syncing");
+
+      try {
+        // 1. Delete online the tasks you deleted here
+        if (pendingDeletes.length > 0) {
+          const ids = pendingDeletes.slice();
+          const result = await cloud.from("tasks").delete().in("id", ids);
+          if (result.error) throw result.error;
+          pendingDeletes = pendingDeletes.filter(function (id) { return ids.indexOf(id) === -1; });
+          saveList(DELETES_KEY, pendingDeletes);
+        }
+
+        // 2. Upload the tasks that changed here
+        const sent = tasks.filter(needsUpload).map(function (t) {
+          return { task: t, rev: t.rev || 0 };
+        });
+
+        if (sent.length > 0) {
+          const rows = sent.map(function (s) { return toRow(s.task); });
+          const result = await cloud.from("tasks").upsert(rows, { onConflict: "id" });
+          if (result.error) throw result.error;
+
+          sent.forEach(function (s) {
+            s.task.synced = true;
+            // If the task changed again while uploading, it stays "dirty" for the next round
+            if ((s.task.rev || 0) === s.rev) s.task.dirty = false;
+          });
+          saveTasks();
+        }
+
+        // 3. Download everything from your account
+        const result = await cloud.from("tasks").select("*").order("created_at", { ascending: true });
+        if (result.error) throw result.error;
+
+        const before = fingerprint();
+
+        // Skip tasks we just deleted here (the online delete may not have happened yet)
+        const cloudTasks = result.data
+          .map(fromRow)
+          .filter(function (t) { return pendingDeletes.indexOf(t.id) === -1; });
+
+        // For tasks with changes not uploaded yet, our version wins.
+        // Tasks that exist only here (created while offline) are kept too.
+        const localDirty = {};
+        tasks.forEach(function (t) { if (needsUpload(t)) localDirty[t.id] = t; });
+
+        const merged = cloudTasks.map(function (t) { return localDirty[t.id] || t; });
+        tasks.forEach(function (t) {
+          if (needsUpload(t) && !cloudTasks.some(function (c) { return c.id === t.id; })) merged.push(t);
+        });
+
+        tasks = merged;
+        saveTasks();
+
+        // 4. Save the snooze history online (only for tasks that exist online)
+        if (snoozeLog.length > 0) {
+          const known = {};
+          cloudTasks.forEach(function (t) { known[t.id] = true; });
+
+          const toSend = [];
+          const toDrop = [];
+          snoozeLog.forEach(function (e) {
+            if (known[e.taskId]) toSend.push(e);
+            else if (!findTask(e.taskId)) toDrop.push(e); // the task is gone, so forget its snoozes
+          });
+
+          if (toSend.length > 0) {
+            const rows = toSend.map(function (e) {
+              return {
+                task_id: e.taskId,
+                choice: e.choice,
+                seconds: e.seconds,
+                was_auto: e.auto,
+                started_at: new Date(e.at).toISOString()
+              };
+            });
+            const inserted = await cloud.from("snoozes").insert(rows);
+            if (inserted.error) throw inserted.error;
+          }
+
+          snoozeLog = snoozeLog.filter(function (e) {
+            return toSend.indexOf(e) === -1 && toDrop.indexOf(e) === -1;
+          });
+          saveList(SNOOZE_LOG_KEY, snoozeLog);
+        }
+
+        if (fingerprint() !== before) render();
+        setSyncState("synced");
+      } catch (error) {
+        setSyncState(navigator.onLine ? "error" : "offline");
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(syncNow, 30000); // try again in 30 seconds
+      }
+    }
+
+    // ---------- Signing in and out ----------
+
+    async function signIn() {
+      const email = authEmail.value.trim();
+      const password = authPassword.value;
+      if (!email || !password) {
+        authMessage.textContent = "Enter your email and password.";
+        return;
+      }
+
+      authMessage.textContent = "Signing in\u2026";
+      try {
+        const result = await cloud.auth.signInWithPassword({ email: email, password: password });
+        if (result.error) {
+          authMessage.textContent = result.error.message;
+          return;
+        }
+        authMessage.textContent = "";
+        authPassword.value = "";
+      } catch (error) {
+        authMessage.textContent = "Could not reach the server. Check your internet connection.";
+      }
+    }
+
+    async function signUp() {
+      const email = authEmail.value.trim();
+      const password = authPassword.value;
+      if (!email || password.length < 6) {
+        authMessage.textContent = "Enter your email and a password of 6 or more characters.";
+        return;
+      }
+
+      authMessage.textContent = "Creating your account\u2026";
+      try {
+        const result = await cloud.auth.signUp({ email: email, password: password });
+        if (result.error) {
+          authMessage.textContent = result.error.message;
+          return;
+        }
+        authPassword.value = "";
+        // If your project asks people to confirm their email, there is no session yet.
+        authMessage.textContent = result.data.session
+          ? ""
+          : "Check your email to confirm your account, then come back and sign in.";
+      } catch (error) {
+        authMessage.textContent = "Could not reach the server. Check your internet connection.";
+      }
+    }
+
+    async function signOut() {
+      await syncNow(); // upload anything still waiting
+
+      const unsynced = tasks.some(needsUpload) || pendingDeletes.length > 0;
+      if (unsynced && !window.confirm("Some changes have not synced yet and will be lost if you sign out. Sign out anyway?")) {
+        return;
+      }
+
+      try {
+        await cloud.auth.signOut();
+      } catch (error) {
+        // Even if this fails, we still sign out on this device.
+      }
+
+      // Your tasks stay safe in your account. Clear this device so the next person
+      // who uses it does not see them.
+      session = null;
+      tasks = [];
+      pendingDeletes = [];
+      snoozeLog = [];
+      saveTasks();
+      saveList(DELETES_KEY, pendingDeletes);
+      saveList(SNOOZE_LOG_KEY, snoozeLog);
+      updateAccountUI();
+      render();
+      showToast("\u2713", "Signed out. Your tasks are saved in your account.", "win");
+    }
+
+    function updateAccountUI() {
+      accountToggle.hidden = !cloud;
+      accountToggle.textContent = session ? "Sign out" : "Sign in to sync across devices";
+      if (session) accountPanel.hidden = true;
+      setSyncState(syncState);
+    }
+
+    accountToggle.addEventListener("click", function () {
+      if (session) {
+        signOut();
+      } else {
+        accountPanel.hidden = !accountPanel.hidden;
+        if (!accountPanel.hidden) authEmail.focus();
+      }
+    });
+
+    signinBtn.addEventListener("click", signIn);
+    signupBtn.addEventListener("click", signUp);
+
+    authPassword.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        signIn();
+      }
+    });
+
+    // Sync again when you come back online
+    window.addEventListener("online", syncNow);
+    window.addEventListener("offline", function () {
+      if (session) setSyncState("offline");
+    });
+
+    if (cloud) {
+      // Supabase tells us when you sign in, sign out, or when your saved session is found.
+      cloud.auth.onAuthStateChange(function (event, newSession) {
+        session = newSession;
+        // Wait a moment: calling Supabase from inside this function can make it freeze.
+        setTimeout(function () {
+          updateAccountUI();
+          if (session && (event === "SIGNED_IN" || event === "INITIAL_SESSION")) syncNow();
+        }, 0);
+      });
+    }
+    updateAccountUI();
 
     // ---------- Installing the app (PWA) ----------
 
@@ -1419,8 +1953,12 @@
     setInterval(tick, 1000);
 
     // Browsers slow timers down in background tabs, so catch up when you come back
+    // It is also a good moment to pick up changes you made on another device.
     document.addEventListener("visibilitychange", function () {
-      if (!document.hidden) tick();
+      if (!document.hidden) {
+        tick();
+        syncNow();
+      }
     });
   </script>
 </body>
